@@ -1,43 +1,80 @@
+import os
+import requests
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
+from dotenv import load_dotenv
+import sys
+sys.path.append(r"C:\Users\DELL\OneDrive\Documents\robo")
+from portfolio_optimizer import get_stock_data, mean_variance_optimization  # Import optimization functions
 
+# Load API Key from .env
+load_dotenv()
+POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+
+# Define API URLs
+POLYGON_BASE_URL = "https://api.polygon.io/v3/reference/tickers"
+ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+
+# Streamlit App Title
 st.title("📊 AI-Driven Portfolio Recommendation")
-st.write("✅ The page is running!")
+st.write("Optimize your stock portfolio using AI-driven insights!")
 
-# ✅ Check if risk tolerance is set, otherwise show a warning
-if "risk_tolerance" not in st.session_state:
-    st.warning("⚠️ Please go to the **Risk Profiling** page and select your risk category.")
-    st.stop()  # Stop execution if risk profile is missing
+# User Risk Tolerance Selection
+risk_tolerance = st.selectbox("Select your risk tolerance:", ["Low", "Medium", "High"])
 
-# Get risk tolerance from session state
-risk_label = st.session_state["risk_tolerance"]
-st.write(f"### Your Risk Category: **{risk_label}**")
+# Function to fetch stock symbols from Polygon API
+def get_stock_tickers():
+    params = {
+        "market": "stocks",
+        "active": "true",
+        "order": "asc",
+        "limit": 10,
+        "sort": "ticker",
+        "apiKey": POLYGON_API_KEY
+    }
+    response = requests.get(POLYGON_BASE_URL, params=params)
+    if response.status_code == 200:
+        return [ticker["ticker"] for ticker in response.json().get("results", [])]
+    else:
+        return []
 
-# Map risk category to suggested assets
-risk_mapping = {
-    "Conservative": ["BND", "TLT", "GLD"],
-    "Moderate": ["SPY", "QQQ", "VNQ"],
-    "Aggressive": ["TSLA", "NVDA", "BTC-USD"]
-}
+# Function to fetch stock symbols from Alpha Vantage
+def get_alpha_vantage_stock_symbols():
+    params = {"function": "LISTING_STATUS", "apikey": ALPHA_VANTAGE_API_KEY}
+    response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params)
+    if response.status_code == 200:
+        stock_list = response.text.split("\n")
+        return [row.split(",")[0] for row in stock_list if row][:10]
+    else:
+        return []
 
-suggested_assets = risk_mapping.get(risk_label, ["SPY"])
-st.write(f"### Suggested Investment Classes: {', '.join(suggested_assets)}")
+# Fetch stock symbols from both sources
+polygon_symbols = get_stock_tickers()
+av_symbols = get_alpha_vantage_stock_symbols()
 
-# Example: Generate random asset allocation
-np.random.seed(42)
-weights = np.random.rand(len(suggested_assets))
-weights /= weights.sum()  # Normalize to sum to 1
+# Merge and display stock symbols
+suggested_assets = list(set(polygon_symbols + av_symbols))
+if not suggested_assets:
+    st.error("❌ No stock symbols available.")
+    st.stop()
 
-# Display allocations
-st.write("### Portfolio Allocation")
-for asset, weight in zip(suggested_assets, weights):
-    st.write(f"✅ {asset}: **{weight*100:.2f}%**")
+st.write(f"### Suggested Stocks: {', '.join(suggested_assets)}")
 
-# Show Pie Chart
-fig, ax = plt.subplots()
-ax.pie(weights, labels=suggested_assets, autopct='%1.1f%%', startangle=90)
-ax.axis("equal")
-st.pyplot(fig)
+# Fetch historical stock data
+try:
+    stock_data = get_stock_data(suggested_assets)
+    st.success("✅ Stock data loaded successfully!")
+except Exception as e:
+    st.error(f"❌ Error loading stock data: {e}")
+    st.stop()
 
-st.success("📢 Portfolio generated dynamically based on your risk profile.")
+# Adjust risk preference in optimization
+risk_free_rate = 0.02 if risk_tolerance == "Low" else 0.04 if risk_tolerance == "Medium" else 0.06
+optimized_weights = mean_variance_optimization(pd.DataFrame({s: stock_data[s]["Adj Close"] for s in stock_data}), risk_free_rate)
+
+# Display portfolio allocation
+st.write("### Optimized Portfolio Allocation")
+for asset, weight in optimized_weights.items():
+    st.write(f"✅ {asset}: {weight:.2%}")
